@@ -64,13 +64,20 @@ int LogWriter::Init(int isWriteTime_, int isCSV_, const char* filePass)
 	// ミューテックスの生成
 	// (ミューテックスに関する参考サイト) https://wa3.i-3-i.info/word13360.html
 	mutex = CreateMutex(
-		NULL,
-		FALSE,
-		NULL
+		NULL,				// セキュリティ関係の指定ができるけど、使ったことないしわからんのでNULLで
+		FALSE,				// このスレッドがミューテックスの所有者であるかどうかを示すフラグ（基本FALSE）
+		NULL				// ミューテックスの名前（基本NULL、名前が重複するとエラーになる）
 	);
 
-
-	thread = (HANDLE)_beginthreadex(NULL, 0, LogWriter::BeginThread, this, NULL, NULL);
+	// スレッドの生成
+	thread = (HANDLE)_beginthreadex(
+		NULL,						// ミューテックスと同じくセキュリティ関係の記述ができる
+		0,							// スレッドのスタック数。基本は0
+		LogWriter::BeginThread,		// 呼び出したい関数のアドレス（unsigned int __stdcall (void*)の関数じゃないと受け入れない）
+		this,						// 呼び出した関数の(void*)引数に渡す値、今回は自分自身を渡すのでthis
+		NULL,						// 生成後すぐに実行するかのフラグ（0ですぐ実行）
+		NULL						// スレッドの識別番号（基本NULL）
+	);
 
 	return TRUE;
 }
@@ -101,16 +108,24 @@ void LogWriter::WriteLog()
 	{
 		if (logStr[0] == '\0')continue;
 
+		// *** 共有変数へのアクセス開始 *** //
+
 		WaitForSingleObject(mutex, INFINITE);
 
+		// 文字列を退避させずにファイルに書き込むと処理が重くなるので退避
 		strcpy_s(cpyStr, logStr);
+
+		// 書き込んだ分配列を空にする
 		memset(logStr, 0, sizeof(logStr));
 
 		ReleaseMutex(mutex);
 
+		// *** 共有変数へのアクセス終了 *** //
+
+
 		FILE* fp;
 
-		// 書き込みモードでログテキストを生成
+		// 追記モードでログテキストを開く
 		if (fopen_s(&fp, logFilePass, "a") != 0)
 		{
 			MessageBox(NULL, "ログファイルの書き込みに失敗しました。", "えらぁ", NULL);
@@ -204,10 +219,11 @@ void LogWriter::AddLog(const char* format, ...)
 /// </summary>
 void LogWriter::Exit()
 {
-	// スレッドのループフラグを倒して終了待機
+	// スレッドのループフラグを倒して処理が終わるのを待つ
 	isRun = FALSE;
 	WaitForSingleObject(thread, INFINITY);
 
+	// ここでスレッドとミューテックスの解放（これをしないとリークの原因になる）
 	CloseHandle(thread);
 	CloseHandle(mutex);
 
